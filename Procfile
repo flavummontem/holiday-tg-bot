@@ -1,0 +1,1 @@
+worker: python holiday_bot.py
