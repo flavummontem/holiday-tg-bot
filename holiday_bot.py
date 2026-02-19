@@ -71,7 +71,6 @@ def get_holidays(country):
     response = requests.get(url, params=params)
 
     if response.status_code != 200:
-        print("Calendarific error:", response.text)
         return []
 
     data = response.json()
@@ -107,46 +106,65 @@ def handle_update(update):
             "custom": []
         })
 
+        # ===== START MENU =====
         if text == "/start":
-            send_message(chat_id,
-                "Holiday bot\n"
-                "/subscribe_business\n"
-                "/subscribe_employee\n"
-                "/subscribe_country\n"
-                "/list\n"
-                "/clear"
+
+            keyboard = {
+                "keyboard": [
+                    ["🏢 Business Presence"],
+                    ["👥 Employee Presence"],
+                    ["🌍 Select Specific Country"],
+                    ["📋 My Subscriptions"],
+                    ["❌ Unsubscribe All"]
+                ],
+                "resize_keyboard": True
+            }
+
+            send_message(
+                chat_id,
+                "👋 Welcome to Global Holiday Radar\n\n"
+                "Built by the International Support team to help you stay ahead of public holidays worldwide.\n\n"
+                "This bot keeps you informed about upcoming holidays in:\n\n"
+                "🏢 Countries where we operate (Business Presence)\n"
+                "👥 Countries where our employees are based (Employee Presence)\n\n"
+                "You’ll receive alerts 14 / 7 / 3 / 1 days before each public holiday.\n\n"
+                "Questions or ideas?\n"
+                "@rubbeldiekatz",
+                reply_markup=keyboard
             )
 
-        elif text == "/subscribe_business":
+        elif text == "🏢 Business Presence":
             subs[chat_id]["business"] = True
             save_json("subscriptions.json", subs)
-            send_message(chat_id, "Subscribed to BUSINESS countries")
+            send_message(chat_id, "✅ Subscribed to Business Presence countries")
 
-        elif text == "/subscribe_employee":
+        elif text == "👥 Employee Presence":
             subs[chat_id]["employee"] = True
             save_json("subscriptions.json", subs)
-            send_message(chat_id, "Subscribed to EMPLOYEE countries")
+            send_message(chat_id, "✅ Subscribed to Employee Presence countries")
 
-        elif text == "/subscribe_country":
+        elif text == "🌍 Select Specific Country":
+
             keyboard = {
                 "inline_keyboard": [
                     [{"text": code, "callback_data": f"country:{code}"}]
                     for code in ALL_COUNTRIES
                 ]
             }
-            send_message(chat_id, "Choose country:", keyboard)
 
-        elif text == "/list":
+            send_message(chat_id, "Select a country:", keyboard)
+
+        elif text == "📋 My Subscriptions":
             send_message(chat_id, json.dumps(subs[chat_id], indent=2))
 
-        elif text == "/clear":
+        elif text == "❌ Unsubscribe All":
             subs[chat_id] = {
                 "business": False,
                 "employee": False,
                 "custom": []
             }
             save_json("subscriptions.json", subs)
-            send_message(chat_id, "Subscriptions cleared")
+            send_message(chat_id, "All subscriptions cleared.")
 
     if "callback_query" in update:
         chat_id = str(update["callback_query"]["message"]["chat"]["id"])
@@ -163,7 +181,7 @@ def handle_update(update):
             if code not in subs[chat_id]["custom"]:
                 subs[chat_id]["custom"].append(code)
                 save_json("subscriptions.json", subs)
-                send_message(chat_id, f"Subscribed to {code}")
+                send_message(chat_id, f"✅ Subscribed to {code}")
 
 
 # ======= АЛЕРТЫ =======
