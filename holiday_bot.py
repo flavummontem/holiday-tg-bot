@@ -9,7 +9,7 @@ CALENDARIFIC_KEY = os.getenv("CALENDARIFIC_KEY")
 
 ALERT_DAYS = [14, 7, 3, 1]
 
-# ======= СТРАНЫ С ФЛАГАМИ =======
+# ===== COUNTRIES WITH FLAGS =====
 
 COUNTRIES = {
     "AO": "🇦🇴 Angola",
@@ -57,32 +57,28 @@ COUNTRIES = {
     "ZW": "🇿🇼 Zimbabwe"
 }
 
-BUSINESS_COUNTRIES = list(COUNTRIES.keys())
-EMPLOYEE_COUNTRIES = list(COUNTRIES.keys())
-
-
-# ======= ФАЙЛЫ =======
+# ===== FILE STORAGE =====
 
 def load_json(filename):
     if not os.path.exists(filename):
         return {}
     with open(filename, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except:
+            return {}
 
 def save_json(filename, data):
     with open(filename, "w") as f:
         json.dump(data, f, indent=2)
 
-
-# ======= TELEGRAM =======
+# ===== TELEGRAM =====
 
 def send_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
-
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
-
     requests.post(url, data=payload)
 
 def get_updates(offset=None):
@@ -92,8 +88,7 @@ def get_updates(offset=None):
         params["offset"] = offset
     return requests.get(url, params=params).json()
 
-
-# ======= CALENDARIFIC =======
+# ===== CALENDARIFIC =====
 
 def get_holidays(country):
     year = datetime.utcnow().year
@@ -112,14 +107,12 @@ def get_holidays(country):
         return []
 
     data = response.json()
-
     if "response" not in data:
         return []
 
     holidays = data["response"].get("holidays", [])
 
     result = []
-
     for h in holidays:
         result.append({
             "date": h["date"]["iso"].split("T")[0],
@@ -129,10 +122,9 @@ def get_holidays(country):
 
     return result
 
+# ===== COUNTRY KEYBOARD =====
 
-# ======= МЕНЮ СТРАН =======
-
-def build_country_keyboard():
+def build_country_keyboard(subscription_type):
     buttons = []
     items = list(COUNTRIES.items())
 
@@ -141,21 +133,20 @@ def build_country_keyboard():
 
         row.append({
             "text": items[i][1],
-            "callback_data": f"country:{items[i][0]}"
+            "callback_data": f"add:{subscription_type}:{items[i][0]}"
         })
 
         if i + 1 < len(items):
             row.append({
                 "text": items[i+1][1],
-                "callback_data": f"country:{items[i+1][0]}"
+                "callback_data": f"add:{subscription_type}:{items[i+1][0]}"
             })
 
         buttons.append(row)
 
     return {"inline_keyboard": buttons}
 
-
-# ======= ОБРАБОТКА =======
+# ===== MAIN HANDLER =====
 
 def handle_update(update):
     subs = load_json("subscriptions.json")
@@ -164,19 +155,15 @@ def handle_update(update):
         chat_id = str(update["message"]["chat"]["id"])
         text = update["message"].get("text", "")
 
-        subs.setdefault(chat_id, {
-            "business": False,
-            "employee": False,
-            "custom": []
-        })
+        subs.setdefault(chat_id, [])
 
         if text == "/start":
 
             keyboard = {
                 "keyboard": [
-                    ["🏢 Business Presence"],
-                    ["👥 Employee Presence"],
-                    ["🌍 Select Specific Country"],
+                    ["🏢 Where We Operate (Business Presence Countries)"],
+                    ["👥 Where Our Employees Are (Employee Presence Countries)"],
+                    ["🌍 Choose a Country"],
                     ["📋 My Subscriptions"],
                     ["❌ Unsubscribe All"]
                 ],
@@ -200,28 +187,20 @@ def handle_update(update):
                 reply_markup=keyboard
             )
 
-        elif text == "🏢 Business Presence":
-            subs[chat_id]["business"] = True
-            save_json("subscriptions.json", subs)
-            send_message(chat_id, "✅ Subscribed to Business Presence countries")
+        elif text == "🏢 Where We Operate (Business Presence Countries)":
+            send_message(chat_id, "Select a country:", build_country_keyboard("business"))
 
-        elif text == "👥 Employee Presence":
-            subs[chat_id]["employee"] = True
-            save_json("subscriptions.json", subs)
-            send_message(chat_id, "✅ Subscribed to Employee Presence countries")
+        elif text == "👥 Where Our Employees Are (Employee Presence Countries)":
+            send_message(chat_id, "Select a country:", build_country_keyboard("employee"))
 
-        elif text == "🌍 Select Specific Country":
-            send_message(chat_id, "Select a country:", build_country_keyboard())
+        elif text == "🌍 Choose a Country":
+            send_message(chat_id, "Select a country:", build_country_keyboard("custom"))
 
         elif text == "📋 My Subscriptions":
             send_message(chat_id, json.dumps(subs[chat_id], indent=2))
 
         elif text == "❌ Unsubscribe All":
-            subs[chat_id] = {
-                "business": False,
-                "employee": False,
-                "custom": []
-            }
+            subs[chat_id] = []
             save_json("subscriptions.json", subs)
             send_message(chat_id, "All subscriptions cleared.")
 
@@ -229,21 +208,19 @@ def handle_update(update):
         chat_id = str(update["callback_query"]["message"]["chat"]["id"])
         data = update["callback_query"]["data"]
 
-        subs.setdefault(chat_id, {
-            "business": False,
-            "employee": False,
-            "custom": []
-        })
+        subs.setdefault(chat_id, [])
 
-        if data.startswith("country:"):
-            code = data.split(":")[1]
-            if code not in subs[chat_id]["custom"]:
-                subs[chat_id]["custom"].append(code)
+        if data.startswith("add:"):
+            _, sub_type, country = data.split(":")
+
+            entry = {"country": country, "type": sub_type}
+
+            if entry not in subs[chat_id]:
+                subs[chat_id].append(entry)
                 save_json("subscriptions.json", subs)
-                send_message(chat_id, f"✅ Subscribed to {COUNTRIES[code]}")
+                send_message(chat_id, f"✅ Subscribed to {COUNTRIES[country]} ({sub_type})")
 
-
-# ======= АЛЕРТЫ =======
+# ===== ALERT ENGINE =====
 
 def check_and_notify():
     subs = load_json("subscriptions.json")
@@ -251,42 +228,51 @@ def check_and_notify():
 
     today = datetime.utcnow().date()
 
-    for chat_id, data in subs.items():
+    for chat_id, entries in subs.items():
+        for entry in entries:
 
-        countries = set(data["custom"])
+            country = entry["country"]
+            sub_type = entry["type"]
 
-        if data["business"]:
-            countries.update(BUSINESS_COUNTRIES)
-
-        if data["employee"]:
-            countries.update(EMPLOYEE_COUNTRIES)
-
-        for country in countries:
             holidays = get_holidays(country)
 
             for holiday in holidays:
-                holiday_date = datetime.strptime(
-                    holiday["date"], "%Y-%m-%d"
-                ).date()
-
+                holiday_date = datetime.strptime(holiday["date"], "%Y-%m-%d").date()
                 delta = (holiday_date - today).days
 
                 if delta in ALERT_DAYS:
-                    key = f"{chat_id}-{country}-{holiday['date']}-{delta}"
+                    key = f"{chat_id}-{country}-{sub_type}-{holiday['date']}-{delta}"
 
                     if key not in sent:
+
+                        formatted_date = holiday_date.strftime("%d %B %Y")
+
+                        if sub_type == "business":
+                            header = "🚖 BUSINESS HOLIDAY ALERT"
+                            footer = "Please consider potential operational impact."
+                        elif sub_type == "employee":
+                            header = "👥 EMPLOYEE HOLIDAY ALERT"
+                            footer = "Local teams may be unavailable. Plan workload accordingly."
+                        else:
+                            header = "🌍 HOLIDAY ALERT"
+                            footer = ""
+
                         message = (
+                            f"{header}\n\n"
                             f"{COUNTRIES[country]}\n"
                             f"🎉 {holiday['localName']}\n"
-                            f"📅 {holiday['date']}\n"
+                            f"📅 {formatted_date}\n"
                             f"⏳ In {delta} days\n\n"
-                            f"{holiday['description'] or 'Public holiday. Government institutions may be closed.'}"
+                            f"{holiday['description'] or 'Public holiday. Government institutions may be closed.'}\n\n"
+                            f"{footer}"
                         )
+
                         send_message(chat_id, message)
                         sent[key] = True
 
     save_json("sent_alerts.json", sent)
 
+# ===== MAIN LOOP =====
 
 if __name__ == "__main__":
     offset = None
