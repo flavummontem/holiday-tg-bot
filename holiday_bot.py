@@ -2,13 +2,14 @@ import requests
 import json
 import time
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 TOKEN = os.getenv("TOKEN")
 CALENDARIFIC_KEY = os.getenv("CALENDARIFIC_KEY")
 ADMIN_USERNAME = "rubbeldiekatz"
 
 ALERT_DAYS = [14, 7, 3, 1]
+PAGE_SIZE = 10
 
 COUNTRIES = {
     "AO": "🇦🇴 Angola", "AR": "🇦🇷 Argentina", "AM": "🇦🇲 Armenia",
@@ -52,10 +53,8 @@ def save_json(filename, data):
 def send_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
-
     requests.post(url, data=payload)
 
 def get_updates(offset=None):
@@ -76,11 +75,7 @@ def get_cached_holidays(country):
 
     holidays = fetch_holidays(country)
 
-    cache[country] = {
-        "date": today_str,
-        "holidays": holidays
-    }
-
+    cache[country] = {"date": today_str, "holidays": holidays}
     save_json("holiday_cache.json", cache)
     return holidays
 
@@ -105,8 +100,8 @@ def fetch_holidays(country):
         return []
 
     holidays = data["response"].get("holidays", [])
-
     result = []
+
     for h in holidays:
         result.append({
             "date": h["date"]["iso"].split("T")[0],
@@ -116,173 +111,93 @@ def fetch_holidays(country):
 
     return result
 
-# ========= KEYBOARDS =========
+# ========= PAGINATED COUNTRY KEYBOARD =========
 
-def build_country_keyboard(sub_type):
-    buttons = []
+def build_country_keyboard(sub_type, page=0):
     items = list(COUNTRIES.items())
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    slice_items = items[start:end]
 
-    for i in range(0, len(items), 2):
-        row = []
-        row.append({
-            "text": items[i][1],
-            "callback_data": f"add:{sub_type}:{items[i][0]}"
-        })
-        if i + 1 < len(items):
-            row.append({
-                "text": items[i+1][1],
-                "callback_data": f"add:{sub_type}:{items[i+1][0]}"
-            })
-        buttons.append(row)
-
-    return {"inline_keyboard": buttons}
-
-def build_remove_keyboard(entries):
     buttons = []
-    for i, entry in enumerate(entries):
-        icon = "🏢" if entry["type"] == "business" else "👥" if entry["type"] == "employee" else "🌍"
-        label = f"{icon} {COUNTRIES[entry['country']]}"
+
+    for code, label in slice_items:
         buttons.append([{
             "text": label,
-            "callback_data": f"remove:{i}"
+            "callback_data": f"add:{sub_type}:{code}"
         }])
+
+    nav = []
+    if start > 0:
+        nav.append({"text": "⬅️ Prev", "callback_data": f"page:{sub_type}:{page-1}"})
+    if end < len(items):
+        nav.append({"text": "Next ➡️", "callback_data": f"page:{sub_type}:{page+1}"})
+
+    if nav:
+        buttons.append(nav)
+
     return {"inline_keyboard": buttons}
 
-# ========= HANDLER =========
+# ========= WEEKLY DIGEST =========
 
-def handle_update(update):
+def send_weekly_digest():
     subs = load_json("subscriptions.json")
+    today = datetime.utcnow().date()
 
-    if "message" in update:
-        msg = update["message"]
-        chat_id = str(msg["chat"]["id"])
-        text = msg.get("text", "")
-        username = msg["from"].get("username", "")
+    if today.weekday() != 0:  # Monday
+        return
 
-        subs.setdefault(chat_id, [])
+    for chat_id, entries in subs.items():
+        upcoming = []
 
-        if text == "/start":
+        for entry in entries:
+            holidays = get_cached_holidays(entry["country"])
+            for holiday in holidays:
+                holiday_date = datetime.strptime(holiday["date"], "%Y-%m-%d").date()
+                if 0 <= (holiday_date - today).days <= 14:
+                    upcoming.append((holiday_date, entry["country"], holiday["localName"]))
 
-            keyboard = {
-                "keyboard": [
-                    ["🏢 Where We Operate (Business Presence Countries)"],
-                    ["👥 Where Our Employees Are (Employee Presence Countries)"],
-                    ["🌍 Choose a Country"],
-                    ["📋 My Subscriptions"],
-                    ["➖ Remove a Subscription"],
-                    ["❌ Unsubscribe All"]
-                ],
-                "resize_keyboard": True
-            }
+        if upcoming:
+            upcoming.sort()
+            message = "*📅 Weekly Holiday Digest*\n\nUpcoming in next 14 days:\n\n"
+            for date, country, name in upcoming:
+                message += f"{COUNTRIES[country]} — {name} ({date.strftime('%d %b')})\n"
 
-            send_message(
-                chat_id,
-                "*👋 Welcome to Global Holiday Radar*\n\n"
-                "Stay ahead of public holidays worldwide.\n\n"
-                "You’ll receive alerts 14 / 7 / 3 / 1 days in advance.\n\n"
-                "Questions? @rubbeldiekatz",
-                keyboard
-            )
-
-        elif text.startswith("🏢 Where We Operate"):
-            send_message(chat_id, "Select a country:", build_country_keyboard("business"))
-
-        elif text.startswith("👥 Where Our Employees"):
-            send_message(chat_id, "Select a country:", build_country_keyboard("employee"))
-
-        elif text == "🌍 Choose a Country":
-            send_message(chat_id, "Select a country:", build_country_keyboard("custom"))
-
-        elif text == "📋 My Subscriptions":
-            if not subs[chat_id]:
-                send_message(chat_id, "You have no active subscriptions.")
-            else:
-                message = "*📋 Your Subscriptions*\n\n"
-                for entry in subs[chat_id]:
-                    icon = "🏢" if entry["type"] == "business" else "👥" if entry["type"] == "employee" else "🌍"
-                    message += f"{icon} {COUNTRIES[entry['country']]}\n"
-                send_message(chat_id, message)
-
-        elif text == "➖ Remove a Subscription":
-            if not subs[chat_id]:
-                send_message(chat_id, "No subscriptions to remove.")
-            else:
-                send_message(chat_id, "Select a subscription to remove:", build_remove_keyboard(subs[chat_id]))
-
-        elif text == "❌ Unsubscribe All":
-            subs[chat_id] = []
-            save_json("subscriptions.json", subs)
-            send_message(chat_id, "All subscriptions cleared.")
-
-        elif text == "/stats" and username == ADMIN_USERNAME:
-            total_users = len(subs)
-            total_subs = sum(len(v) for v in subs.values())
-            send_message(chat_id,
-                f"*📊 Global Holiday Radar Stats*\n\n"
-                f"Users: {total_users}\n"
-                f"Total Subscriptions: {total_subs}"
-            )
-
-    if "callback_query" in update:
-        chat_id = str(update["callback_query"]["message"]["chat"]["id"])
-        data = update["callback_query"]["data"]
-
-        subs.setdefault(chat_id, [])
-
-        if data.startswith("add:"):
-            _, sub_type, country = data.split(":")
-            entry = {"country": country, "type": sub_type}
-            if entry not in subs[chat_id]:
-                subs[chat_id].append(entry)
-                save_json("subscriptions.json", subs)
-                send_message(chat_id, f"✅ Subscribed to {COUNTRIES[country]}")
-
-        elif data.startswith("remove:"):
-            index = int(data.split(":")[1])
-            removed = subs[chat_id].pop(index)
-            save_json("subscriptions.json", subs)
-            send_message(chat_id, f"Removed {COUNTRIES[removed['country']]}")
+            send_message(chat_id, message)
 
 # ========= ALERT ENGINE =========
 
 def check_and_notify():
     subs = load_json("subscriptions.json")
     sent = load_json("sent_alerts.json")
-
     today = datetime.utcnow().date()
 
     for chat_id, entries in subs.items():
         for entry in entries:
-
-            country = entry["country"]
-            sub_type = entry["type"]
-
-            holidays = get_cached_holidays(country)
+            holidays = get_cached_holidays(entry["country"])
 
             for holiday in holidays:
                 holiday_date = datetime.strptime(holiday["date"], "%Y-%m-%d").date()
                 delta = (holiday_date - today).days
 
                 if delta in ALERT_DAYS:
-                    key = f"{chat_id}-{country}-{sub_type}-{holiday['date']}-{delta}"
+                    key = f"{chat_id}-{entry['country']}-{entry['type']}-{holiday['date']}-{delta}"
 
                     if key not in sent:
-
                         formatted_date = holiday_date.strftime("%d %B %Y")
-
                         header = "🌍 HOLIDAY ALERT"
-                        if sub_type == "business":
+                        if entry["type"] == "business":
                             header = "🚖 BUSINESS HOLIDAY ALERT"
-                        elif sub_type == "employee":
+                        elif entry["type"] == "employee":
                             header = "👥 EMPLOYEE HOLIDAY ALERT"
 
                         message = (
                             f"*{header}*\n\n"
-                            f"{COUNTRIES[country]}\n"
+                            f"{COUNTRIES[entry['country']]}\n"
                             f"🎉 *{holiday['localName']}*\n"
                             f"📅 {formatted_date}\n"
                             f"⏳ In {delta} days\n\n"
-                            f"{holiday['description'] or 'Public holiday. Government institutions may be closed.'}"
+                            f"{holiday['description'] or 'Public holiday.'}"
                         )
 
                         send_message(chat_id, message)
@@ -301,12 +216,31 @@ if __name__ == "__main__":
 
         for update in data.get("result", []):
             offset = update["update_id"] + 1
-            handle_update(update)
+
+            if "callback_query" in update:
+                data_cb = update["callback_query"]["data"]
+                chat_id = str(update["callback_query"]["message"]["chat"]["id"])
+
+                if data_cb.startswith("page:"):
+                    _, sub_type, page = data_cb.split(":")
+                    send_message(chat_id, "Select a country:",
+                                 build_country_keyboard(sub_type, int(page)))
+
+                elif data_cb.startswith("add:"):
+                    _, sub_type, country = data_cb.split(":")
+                    subs = load_json("subscriptions.json")
+                    subs.setdefault(chat_id, [])
+                    entry = {"country": country, "type": sub_type}
+                    if entry not in subs[chat_id]:
+                        subs[chat_id].append(entry)
+                        save_json("subscriptions.json", subs)
+                        send_message(chat_id, f"✅ Subscribed to {COUNTRIES[country]}")
 
         today = datetime.utcnow().date()
 
         if last_check != today:
             check_and_notify()
+            send_weekly_digest()
             last_check = today
 
         time.sleep(5)
