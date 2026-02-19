@@ -5,40 +5,25 @@ import os
 from datetime import datetime
 
 TOKEN = os.getenv("TOKEN")
+CALENDARIFIC_KEY = os.getenv("CALENDARIFIC_KEY")
 
 ALERT_DAYS = [14, 7, 3, 1]
 
-PRODUCTS = {
-    "Taxi B2C": [
-        "UZ","AM","AZ","GE","TR","MD","RS","ET","ZW","BW","GH","ZM",
-        "BJ","TG","SN","CI","BO","CO","PE","VE","GT","PK","NP",
-        "AE","OM","MA","IL"
-    ],
-    "Taxi B2B": [
-        "PE","ZM","AZ","AE","CI","AM","UZ","RS","BO"
-    ],
-    "Drive": [
-        "AE","KZ","RU"
-    ],
-    "YangoPay": [
-        "CI","ZM"
-    ],
-    "Buy&Sell": [
-        "CI"
-    ],
-    "Scooters": [
-        "UZ","CO","AM","GE","RS","AE","PE","TR","AZ"
-    ],
-    "Beri Zaryad": [
-        "UZ","AE","CO","AM","RS","GE"
-    ]
-}
+# ======= КОНТУРЫ СТРАН =======
 
-ALL_COUNTRIES = sorted(set(
-    c for arr in PRODUCTS.values() for c in arr
-))
+BUSINESS_COUNTRIES = [
+    "AO","AR","AM","AZ","BY","BJ","BO","BW","KH","CM","CO","CD",
+    "EG","ET","GE","GH","GT","IL","CI","KZ","KE","MU","MD","MA",
+    "MZ","NA","NP","NG","NO","OM","PK","PY","PE","RU","SN","RS",
+    "TG","TR","AE","UZ","VE","ZM","ZW"
+]
 
-# ---------------- FILE HELPERS ----------------
+EMPLOYEE_COUNTRIES = BUSINESS_COUNTRIES.copy()
+
+ALL_COUNTRIES = sorted(set(BUSINESS_COUNTRIES + EMPLOYEE_COUNTRIES))
+
+
+# ======= ФАЙЛЫ =======
 
 def load_json(filename):
     if not os.path.exists(filename):
@@ -50,7 +35,8 @@ def save_json(filename, data):
     with open(filename, "w") as f:
         json.dump(data, f, indent=2)
 
-# ---------------- TELEGRAM ----------------
+
+# ======= TELEGRAM =======
 
 def send_message(chat_id, text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -68,17 +54,45 @@ def get_updates(offset=None):
         params["offset"] = offset
     return requests.get(url, params=params).json()
 
-# ---------------- HOLIDAYS ----------------
+
+# ======= CALENDARIFIC =======
 
 def get_holidays(country):
     year = datetime.utcnow().year
-    url = f"https://date.nager.at/api/v3/PublicHolidays/{year}/{country}"
-    r = requests.get(url)
-    if r.status_code != 200:
-        return []
-    return r.json()
 
-# ---------------- COMMANDS ----------------
+    url = "https://calendarific.com/api/v2/holidays"
+
+    params = {
+        "api_key": CALENDARIFIC_KEY,
+        "country": country,
+        "year": year
+    }
+
+    response = requests.get(url, params=params)
+
+    if response.status_code != 200:
+        print("Calendarific error:", response.text)
+        return []
+
+    data = response.json()
+
+    if "response" not in data:
+        return []
+
+    holidays = data["response"].get("holidays", [])
+
+    result = []
+
+    for h in holidays:
+        result.append({
+            "date": h["date"]["iso"].split("T")[0],
+            "localName": h["name"]
+        })
+
+    return result
+
+
+# ======= ОБРАБОТКА КОМАНД =======
 
 def handle_update(update):
     subs = load_json("subscriptions.json")
@@ -87,16 +101,31 @@ def handle_update(update):
         chat_id = str(update["message"]["chat"]["id"])
         text = update["message"].get("text", "")
 
-        subs.setdefault(chat_id, {"countries": [], "products": []})
+        subs.setdefault(chat_id, {
+            "business": False,
+            "employee": False,
+            "custom": []
+        })
 
         if text == "/start":
             send_message(chat_id,
-                "Holiday bot.\n"
+                "Holiday bot\n"
+                "/subscribe_business\n"
+                "/subscribe_employee\n"
                 "/subscribe_country\n"
-                "/subscribe_product\n"
                 "/list\n"
                 "/clear"
             )
+
+        elif text == "/subscribe_business":
+            subs[chat_id]["business"] = True
+            save_json("subscriptions.json", subs)
+            send_message(chat_id, "Subscribed to BUSINESS countries")
+
+        elif text == "/subscribe_employee":
+            subs[chat_id]["employee"] = True
+            save_json("subscriptions.json", subs)
+            send_message(chat_id, "Subscribed to EMPLOYEE countries")
 
         elif text == "/subscribe_country":
             keyboard = {
@@ -107,20 +136,15 @@ def handle_update(update):
             }
             send_message(chat_id, "Choose country:", keyboard)
 
-        elif text == "/subscribe_product":
-            keyboard = {
-                "inline_keyboard": [
-                    [{"text": name, "callback_data": f"product:{name}"}]
-                    for name in PRODUCTS.keys()
-                ]
-            }
-            send_message(chat_id, "Choose product:", keyboard)
-
         elif text == "/list":
             send_message(chat_id, json.dumps(subs[chat_id], indent=2))
 
         elif text == "/clear":
-            subs[chat_id] = {"countries": [], "products": []}
+            subs[chat_id] = {
+                "business": False,
+                "employee": False,
+                "custom": []
+            }
             save_json("subscriptions.json", subs)
             send_message(chat_id, "Subscriptions cleared")
 
@@ -128,23 +152,21 @@ def handle_update(update):
         chat_id = str(update["callback_query"]["message"]["chat"]["id"])
         data = update["callback_query"]["data"]
 
-        subs.setdefault(chat_id, {"countries": [], "products": []})
+        subs.setdefault(chat_id, {
+            "business": False,
+            "employee": False,
+            "custom": []
+        })
 
         if data.startswith("country:"):
             code = data.split(":")[1]
-            if code not in subs[chat_id]["countries"]:
-                subs[chat_id]["countries"].append(code)
+            if code not in subs[chat_id]["custom"]:
+                subs[chat_id]["custom"].append(code)
+                save_json("subscriptions.json", subs)
                 send_message(chat_id, f"Subscribed to {code}")
 
-        if data.startswith("product:"):
-            name = data.split("product:")[1]
-            if name not in subs[chat_id]["products"]:
-                subs[chat_id]["products"].append(name)
-                send_message(chat_id, f"Subscribed to {name}")
 
-        save_json("subscriptions.json", subs)
-
-# ---------------- ALERTS ----------------
+# ======= АЛЕРТЫ =======
 
 def check_and_notify():
     subs = load_json("subscriptions.json")
@@ -154,10 +176,13 @@ def check_and_notify():
 
     for chat_id, data in subs.items():
 
-        countries = set(data["countries"])
+        countries = set(data["custom"])
 
-        for product in data["products"]:
-            countries.update(PRODUCTS.get(product, []))
+        if data["business"]:
+            countries.update(BUSINESS_COUNTRIES)
+
+        if data["employee"]:
+            countries.update(EMPLOYEE_COUNTRIES)
 
         for country in countries:
             holidays = get_holidays(country)
@@ -184,7 +209,8 @@ def check_and_notify():
 
     save_json("sent_alerts.json", sent)
 
-# ---------------- MAIN ----------------
+
+# ======= MAIN LOOP =======
 
 if __name__ == "__main__":
     offset = None
