@@ -1,7 +1,7 @@
-# ===============================
-# GLOBAL HOLIDAY RADAR v6
-# Full SaaS Mode
-# ===============================
+# ==========================================
+# GLOBAL HOLIDAY RADAR v8 – PRODUCTION
+# Full Enterprise Monolith (Render Safe)
+# ==========================================
 
 import requests
 import json
@@ -10,16 +10,22 @@ import os
 import pytz
 from datetime import datetime, timedelta
 
+# ================= CONFIG =================
+
 TOKEN = os.getenv("TOKEN")
 CALENDARIFIC_KEY = os.getenv("CALENDARIFIC_KEY")
 ADMIN_USERNAME = "rubbeldiekatz"
 
-DEFAULT_ALERT_DAYS = [14, 7, 3, 1]
-PAGE_SIZE = 8
+DEFAULT_ALERT_PRESET = "standard"
+ALERT_PRESETS = {
+    "standard": [14, 7, 3, 1],
+    "medium": [7, 3, 1],
+    "last_day": [1]
+}
 
-# ===============================
-# COUNTRIES
-# ===============================
+PAGE_SIZE = 6
+
+# ================= COUNTRIES =================
 
 COUNTRIES = {
     "UZ": "🇺🇿 Uzbekistan",
@@ -50,69 +56,62 @@ POPULAR_TIMEZONES = [
     "America/Bogota"
 ]
 
-# ===============================
-# FILE UTILS
-# ===============================
+# ================= FILE UTILS =================
 
-def load_json(filename):
-    if not os.path.exists(filename):
+def load_json(name):
+    if not os.path.exists(name):
         return {}
-    with open(filename, "r") as f:
+    with open(name, "r") as f:
         try:
             return json.load(f)
         except:
             return {}
 
-def save_json(filename, data):
-    with open(filename, "w") as f:
+def save_json(name, data):
+    with open(name, "w") as f:
         json.dump(data, f, indent=2)
 
-# ===============================
-# MIGRATION
-# ===============================
+# ================= USER MODEL =================
 
-def migrate_data():
+def ensure_user(chat_id):
     data = load_json("subscriptions.json")
-    changed = False
-
-    for user_id in list(data.keys()):
-        if isinstance(data[user_id], list):
-            data[user_id] = {
-                "subscriptions": data[user_id],
-                "alert_days": DEFAULT_ALERT_DAYS,
-                "mute_until": None,
-                "timezone": "UTC"
-            }
-            changed = True
-
-    if changed:
+    if chat_id not in data:
+        data[chat_id] = {
+            "subscriptions": {},
+            "timezone": "UTC",
+            "alert_preset": DEFAULT_ALERT_PRESET,
+            "mute_until": None
+        }
         save_json("subscriptions.json", data)
+    return data
 
-# ===============================
-# TELEGRAM
-# ===============================
+# ================= TELEGRAM =================
 
 def send_message(chat_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    requests.post(url, data=payload)
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown"
+        }
+        if reply_markup:
+            payload["reply_markup"] = json.dumps(reply_markup)
+        requests.post(url, data=payload, timeout=10)
+    except Exception as e:
+        print("Send message error:", e)
 
 def get_updates(offset=None):
-    url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
-    params = {"timeout": 30}
-    if offset:
-        params["offset"] = offset
-    return requests.get(url, params=params).json()
+    try:
+        url = f"https://api.telegram.org/bot{TOKEN}/getUpdates"
+        params = {"timeout": 30}
+        if offset:
+            params["offset"] = offset
+        return requests.get(url, params=params, timeout=35).json()
+    except:
+        return {"result": []}
 
-# ===============================
-# CALENDARIFIC CACHE
-# ===============================
+# ================= CACHE =================
 
 def get_cached_holidays(country):
     cache = load_json("holiday_cache.json")
@@ -122,50 +121,75 @@ def get_cached_holidays(country):
         return cache[country]["holidays"]
 
     holidays = fetch_holidays(country)
-
-    cache[country] = {
-        "date": today_str,
-        "holidays": holidays
-    }
-
+    cache[country] = {"date": today_str, "holidays": holidays}
     save_json("holiday_cache.json", cache)
     return holidays
 
 def fetch_holidays(country):
-    year = datetime.utcnow().year
-    url = "https://calendarific.com/api/v2/holidays"
+    try:
+        url = "https://calendarific.com/api/v2/holidays"
+        params = {
+            "api_key": CALENDARIFIC_KEY,
+            "country": country,
+            "year": datetime.utcnow().year
+        }
+        r = requests.get(url, params=params, timeout=15)
+        data = r.json()
+        holidays = data.get("response", {}).get("holidays", [])
+        result = []
+        for h in holidays:
+            result.append({
+                "date": h["date"]["iso"].split("T")[0],
+                "name": h["name"],
+                "description": h.get("description", "")
+            })
+        return result
+    except Exception as e:
+        print("Holiday fetch error:", e)
+        return []
 
-    params = {
-        "api_key": CALENDARIFIC_KEY,
-        "country": country,
-        "year": year
+# ================= KEYBOARDS =================
+
+def main_menu():
+    return {
+        "keyboard": [
+            ["🏢 Business Countries"],
+            ["👥 Employee Countries"],
+            ["🌍 Custom Country"],
+            ["📋 My Subscriptions"],
+            ["➖ Remove Subscription"],
+            ["⚙️ Settings"]
+        ],
+        "resize_keyboard": True
     }
 
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        return []
+def paginated_countries(mode, page=0):
+    items = list(COUNTRIES.items())
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    chunk = items[start:end]
 
-    data = response.json()
-    if "response" not in data:
-        return []
+    buttons = []
+    for code, label in chunk:
+        buttons.append([{
+            "text": label,
+            "callback_data": f"sub:{mode}:{code}"
+        }])
 
-    holidays = data["response"].get("holidays", [])
+    nav = []
+    if start > 0:
+        nav.append({"text": "⬅️ Prev", "callback_data": f"page:{mode}:{page-1}"})
+    if end < len(items):
+        nav.append({"text": "Next ➡️", "callback_data": f"page:{mode}:{page+1}"})
 
-    result = []
-    for h in holidays:
-        result.append({
-            "date": h["date"]["iso"].split("T")[0],
-            "localName": h["name"],
-            "description": h.get("description", "")
-        })
+    if nav:
+        buttons.append(nav)
 
-    return result
+    return {"inline_keyboard": buttons}
 
-# ===============================
-# SETTINGS UI
-# ===============================
+# ================= SETTINGS =================
 
-def build_settings_keyboard():
+def settings_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "🌍 Change Timezone", "callback_data": "settings_tz"}],
@@ -178,145 +202,152 @@ def build_settings_keyboard():
 
 def show_settings(chat_id):
     data = load_json("subscriptions.json")
-    user = data.get(chat_id)
+    user = data[chat_id]
 
-    if not user:
-        send_message(chat_id, "Use /start first.")
-        return
-
-    tz = user["timezone"]
-    freq = "/".join(map(str, user["alert_days"]))
-    mute = user["mute_until"]
-
-    mute_status = f"Muted until {mute}" if mute else "Active"
+    mute_status = user["mute_until"] if user["mute_until"] else "Active"
 
     text = (
         "*⚙️ Settings*\n\n"
-        f"🌍 Timezone: {tz}\n"
-        f"🔔 Alert frequency: {freq}\n"
-        f"🔕 Status: {mute_status}\n\n"
-        "Choose an option:"
+        f"🌍 Timezone: {user['timezone']}\n"
+        f"🔔 Alert preset: {user['alert_preset']}\n"
+        f"🔕 Status: {mute_status}"
     )
 
-    send_message(chat_id, text, build_settings_keyboard())
+    send_message(chat_id, text, settings_keyboard())
 
-# ===============================
-# ALERT ENGINE
-# ===============================
+# ================= ALERTS =================
 
-def check_and_notify():
+def send_daily_alerts():
     data = load_json("subscriptions.json")
     sent = load_json("sent_alerts.json")
 
     for chat_id, user in data.items():
 
         tz = pytz.timezone(user["timezone"])
-        now_local = datetime.now(tz).date()
+        today = datetime.now(tz).date()
 
         if user["mute_until"]:
-            mute_date = datetime.strptime(user["mute_until"], "%Y-%m-%d").date()
-            if now_local <= mute_date:
+            if today <= datetime.strptime(user["mute_until"], "%Y-%m-%d").date():
                 continue
 
-        for entry in user["subscriptions"]:
-            holidays = get_cached_holidays(entry["country"])
+        alert_days = ALERT_PRESETS[user["alert_preset"]]
 
-            for holiday in holidays:
-                holiday_date = datetime.strptime(holiday["date"], "%Y-%m-%d").date()
-                delta = (holiday_date - now_local).days
+        for country, mode in user["subscriptions"].items():
+            holidays = get_cached_holidays(country)
 
-                if delta in user["alert_days"]:
+            for h in holidays:
+                h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
+                delta = (h_date - today).days
 
-                    key = f"{chat_id}-{entry['country']}-{holiday['date']}-{delta}"
-
+                if delta in alert_days:
+                    key = f"{chat_id}-{country}-{h['date']}-{delta}"
                     if key not in sent:
-
-                        message = (
-                            f"*🌍 HOLIDAY ALERT*\n\n"
-                            f"{COUNTRIES[entry['country']]}\n"
-                            f"🎉 *{holiday['localName']}*\n"
-                            f"📅 {holiday_date.strftime('%d %B %Y')}\n"
+                        msg = (
+                            f"*🌍 Holiday Alert*\n\n"
+                            f"{COUNTRIES[country]}\n"
+                            f"🎉 *{h['name']}*\n"
+                            f"📅 {h_date.strftime('%d %B %Y')}\n"
                             f"⏳ In {delta} days\n\n"
-                            f"{holiday['description'] or 'Public holiday.'}"
+                            f"{h['description'] or 'Public holiday.'}"
                         )
-
-                        send_message(chat_id, message)
+                        send_message(chat_id, msg)
                         sent[key] = True
 
     save_json("sent_alerts.json", sent)
 
-# ===============================
-# MAIN LOOP
-# ===============================
+def send_weekly_digest():
+    data = load_json("subscriptions.json")
+
+    for chat_id, user in data.items():
+        tz = pytz.timezone(user["timezone"])
+        today = datetime.now(tz).date()
+
+        upcoming = []
+
+        for country in user["subscriptions"]:
+            holidays = get_cached_holidays(country)
+            for h in holidays:
+                h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
+                if 0 <= (h_date - today).days <= 14:
+                    upcoming.append((h_date, country, h["name"]))
+
+        msg = "*📅 Weekly Holiday Digest*\n\n"
+
+        if upcoming:
+            upcoming.sort()
+            for d, c, name in upcoming:
+                msg += f"{COUNTRIES[c]} — {name} ({d.strftime('%d %b')})\n"
+        else:
+            msg += "No upcoming holidays in next 14 days."
+
+        send_message(chat_id, msg)
+
+# ================= MAIN LOOP =================
 
 if __name__ == "__main__":
-    migrate_data()
 
     offset = None
-    last_check = None
+    last_day = None
 
     while True:
-        data = get_updates(offset)
+        updates = get_updates(offset)
 
-        for update in data.get("result", []):
-            offset = update["update_id"] + 1
+        for u in updates.get("result", []):
+            offset = u["update_id"] + 1
 
-            if "message" in update:
-                chat_id = str(update["message"]["chat"]["id"])
-                text = update["message"].get("text", "")
-                username = update["message"]["from"].get("username")
+            if "message" in u:
+                chat_id = str(u["message"]["chat"]["id"])
+                text = u["message"].get("text", "")
+                username = u["message"]["from"].get("username")
 
-                data_users = load_json("subscriptions.json")
-                data_users.setdefault(chat_id, {
-                    "subscriptions": [],
-                    "alert_days": DEFAULT_ALERT_DAYS,
-                    "mute_until": None,
-                    "timezone": "UTC"
-                })
-                save_json("subscriptions.json", data_users)
+                data = ensure_user(chat_id)
 
-                if text == "/settings":
+                if text == "/start":
+                    send_message(chat_id, "Welcome to Global Holiday Radar.", main_menu())
+
+                elif text == "⚙️ Settings":
                     show_settings(chat_id)
 
-                if text == "/stats" and username == ADMIN_USERNAME:
-                    users = len(data_users)
-                    subs = sum(len(v["subscriptions"]) for v in data_users.values())
-                    send_message(chat_id,
-                        f"*📊 Radar Stats*\n\nUsers: {users}\nSubscriptions: {subs}"
-                    )
+                elif text == "/stats" and username == ADMIN_USERNAME:
+                    users = len(data)
+                    subs = sum(len(v["subscriptions"]) for v in data.values())
+                    send_message(chat_id, f"*Users:* {users}\n*Subscriptions:* {subs}")
 
-            if "callback_query" in update:
-                chat_id = str(update["callback_query"]["message"]["chat"]["id"])
-                data_cb = update["callback_query"]["data"]
-                data_users = load_json("subscriptions.json")
+            if "callback_query" in u:
+                chat_id = str(u["callback_query"]["message"]["chat"]["id"])
+                data_cb = u["callback_query"]["data"]
+                data = load_json("subscriptions.json")
 
-                if data_cb == "mute_7":
-                    data_users[chat_id]["mute_until"] = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%d")
+                if data_cb.startswith("sub:"):
+                    _, mode, country = data_cb.split(":")
+                    data[chat_id]["subscriptions"][country] = mode
+
+                elif data_cb == "mute_7":
+                    data[chat_id]["mute_until"] = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%d")
 
                 elif data_cb == "mute_30":
-                    data_users[chat_id]["mute_until"] = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
+                    data[chat_id]["mute_until"] = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")
 
                 elif data_cb == "unmute":
-                    data_users[chat_id]["mute_until"] = None
+                    data[chat_id]["mute_until"] = None
 
                 elif data_cb == "settings_tz":
-                    buttons = []
-                    for tz in POPULAR_TIMEZONES:
-                        buttons.append([{
-                            "text": tz,
-                            "callback_data": f"tz_{tz}"
-                        }])
-                    send_message(chat_id, "Select timezone:", {"inline_keyboard": buttons})
+                    tz_buttons = [[{
+                        "text": tz,
+                        "callback_data": f"tz:{tz}"
+                    }] for tz in POPULAR_TIMEZONES]
+                    send_message(chat_id, "Select timezone:", {"inline_keyboard": tz_buttons})
 
-                elif data_cb.startswith("tz_"):
-                    tz = data_cb.replace("tz_", "")
-                    data_users[chat_id]["timezone"] = tz
+                elif data_cb.startswith("tz:"):
+                    tz = data_cb.split(":")[1]
+                    data[chat_id]["timezone"] = tz
 
-                save_json("subscriptions.json", data_users)
+                save_json("subscriptions.json", data)
 
-        today = datetime.utcnow().date()
-        if last_check != today:
-            check_and_notify()
-            last_check = today
+        today_utc = datetime.utcnow().date()
+        if last_day != today_utc:
+            send_daily_alerts()
+            send_weekly_digest()
+            last_day = today_utc
 
         time.sleep(5)
