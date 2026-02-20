@@ -1,6 +1,6 @@
 # ==========================================
-# GLOBAL HOLIDAY RADAR v9 – PRODUCTION SAFE
-# Full Enterprise Monolith (Render Safe)
+# GLOBAL HOLIDAY RADAR v10 – FINAL STABLE
+# Full Enterprise Monolith
 # ==========================================
 
 import requests
@@ -136,15 +136,15 @@ def ensure_user(chat_id):
 # ================= TELEGRAM =================
 
 def send_message(chat_id, text, reply_markup=None):
-    try:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "Markdown"
-        }
-        if reply_markup:
-            payload["reply_markup"] = json.dumps(reply_markup)
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
 
+    try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
             data=payload,
@@ -167,6 +167,7 @@ def get_updates(offset=None):
         params = {"timeout": 30}
         if offset:
             params["offset"] = offset
+
         r = requests.get(
             f"https://api.telegram.org/bot{TOKEN}/getUpdates",
             params=params,
@@ -176,6 +177,80 @@ def get_updates(offset=None):
     except:
         return {"result": []}
 
+# ================= MENUS =================
+
+def main_menu():
+    return {
+        "keyboard": [
+            ["🏢 Where We Operate (Business Presence Countries)"],
+            ["👥 Where Our Employees Are (Employee Presence Countries)"],
+            ["🌍 Choose a Country"],
+            ["📋 My Subscriptions"],
+            ["➖ Remove a Subscription"],
+            ["⚙️ Settings"]
+        ],
+        "resize_keyboard": True
+    }
+
+def paginated_countries(mode, page=0):
+    items = list(COUNTRIES.items())
+    start = page * PAGE_SIZE
+    end = start + PAGE_SIZE
+    chunk = items[start:end]
+
+    buttons = []
+    for code, label in chunk:
+        buttons.append([{
+            "text": label,
+            "callback_data": f"sub:{mode}:{code}"
+        }])
+
+    nav = []
+    if start > 0:
+        nav.append({"text": "⬅️ Prev", "callback_data": f"page:{mode}:{page-1}"})
+    if end < len(items):
+        nav.append({"text": "Next ➡️", "callback_data": f"page:{mode}:{page+1}"})
+
+    if nav:
+        buttons.append(nav)
+
+    return {"inline_keyboard": buttons}
+
+def remove_subscriptions_menu(chat_id):
+    data = load_json("subscriptions.json")
+    subs = data[chat_id]["subscriptions"]
+
+    if not subs:
+        return None
+
+    buttons = []
+    for country in subs:
+        buttons.append([{
+            "text": COUNTRIES[country],
+            "callback_data": f"remove:{country}"
+        }])
+
+    return {"inline_keyboard": buttons}
+
+def settings_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "🌍 Change Timezone", "callback_data": "settings_tz"}],
+            [{"text": "🔔 Change Alert Frequency", "callback_data": "settings_freq"}],
+            [{"text": "🔕 Mute 7 days", "callback_data": "mute_7"}],
+            [{"text": "🔕 Mute 30 days", "callback_data": "mute_30"}],
+            [{"text": "🔊 Unmute", "callback_data": "unmute"}]
+        ]
+    }
+
+def alert_preset_menu():
+    return {
+        "inline_keyboard": [
+            [{"text": "Standard (14/7/3/1)", "callback_data": "preset:standard"}],
+            [{"text": "Medium (7/3/1)", "callback_data": "preset:medium"}],
+            [{"text": "Last Day Only", "callback_data": "preset:last_day"}]
+        ]
+    }
 # ================= CACHE CLEAN =================
 
 def clean_sent_alerts():
@@ -319,7 +394,7 @@ def send_weekly_digest():
         today = datetime.now(tz).date()
 
         if today.weekday() != 0:  # Monday only
-            return
+            continue
 
         upcoming = []
 
@@ -357,6 +432,8 @@ if __name__ == "__main__":
         for u in updates.get("result", []):
             offset = u["update_id"] + 1
 
+            # ===== CALLBACKS =====
+
             if "callback_query" in u:
                 callback = u["callback_query"]
                 chat_id = str(callback["message"]["chat"]["id"])
@@ -368,6 +445,11 @@ if __name__ == "__main__":
                 if data_cb.startswith("sub:"):
                     _, mode, country = data_cb.split(":")
                     data[chat_id]["subscriptions"][country] = mode
+                    send_message(
+                        chat_id,
+                        f"✅ Subscribed to {COUNTRIES[country]}",
+                        main_menu()
+                    )
 
                 elif data_cb.startswith("page:"):
                     _, mode, page = data_cb.split(":")
@@ -381,12 +463,67 @@ if __name__ == "__main__":
                 elif data_cb.startswith("remove:"):
                     country = data_cb.split(":")[1]
                     data[chat_id]["subscriptions"].pop(country, None)
+                    send_message(
+                        chat_id,
+                        f"❌ Removed {COUNTRIES[country]}",
+                        main_menu()
+                    )
 
                 elif data_cb.startswith("tz:"):
                     tz = data_cb.split(":")[1]
                     data[chat_id]["timezone"] = tz
+                    send_message(
+                        chat_id,
+                        f"🌍 Timezone updated to {tz}",
+                        main_menu()
+                    )
+
+                elif data_cb.startswith("preset:"):
+                    preset = data_cb.split(":")[1]
+                    data[chat_id]["alert_preset"] = preset
+                    send_message(
+                        chat_id,
+                        f"🔔 Alert preset updated to {preset}",
+                        main_menu()
+                    )
+
+                elif data_cb == "mute_7":
+                    data[chat_id]["mute_until"] = (
+                        datetime.utcnow() + timedelta(days=7)
+                    ).strftime("%Y-%m-%d")
+                    send_message(chat_id, "🔕 Muted for 7 days", main_menu())
+
+                elif data_cb == "mute_30":
+                    data[chat_id]["mute_until"] = (
+                        datetime.utcnow() + timedelta(days=30)
+                    ).strftime("%Y-%m-%d")
+                    send_message(chat_id, "🔕 Muted for 30 days", main_menu())
+
+                elif data_cb == "unmute":
+                    data[chat_id]["mute_until"] = None
+                    send_message(chat_id, "🔊 Notifications unmuted", main_menu())
+
+                elif data_cb == "settings_tz":
+                    tz_buttons = [[{
+                        "text": tz,
+                        "callback_data": f"tz:{tz}"
+                    }] for tz in POPULAR_TIMEZONES]
+                    send_message(
+                        chat_id,
+                        "Select timezone:",
+                        {"inline_keyboard": tz_buttons}
+                    )
+
+                elif data_cb == "settings_freq":
+                    send_message(
+                        chat_id,
+                        "Select alert frequency:",
+                        alert_preset_menu()
+                    )
 
                 save_json("subscriptions.json", data)
+
+            # ===== TEXT COMMANDS =====
 
             if "message" in u:
                 chat_id = str(u["message"]["chat"]["id"])
@@ -396,22 +533,62 @@ if __name__ == "__main__":
                 data = ensure_user(chat_id)
 
                 if text == "/start":
-    welcome_text = (
-        "👋 *Welcome to Global Holiday Radar*\n\n"
-        "This bot was built by the International Support team\n"
-        "to help you stay ahead of public holidays worldwide.\n\n"
-        "*What can it do?*\n\n"
-        "🏢 Track holidays in countries where we operate\n"
-        "👥 Track holidays in countries where our employees are based\n"
-        "🌍 Track specific countries of your choice\n\n"
-        "You’ll receive alerts\n"
-        "14 / 7 / 3 / 1 days before each public holiday.\n\n"
-        "Use the menu below to subscribe.\n\n"
-        "Questions, feedback or improvements?\n"
-        "@rubbeldiekatz"
-    )
-    send_message(chat_id, welcome_text, main_menu())
+                    welcome_text = (
+                        "👋 *Welcome to Global Holiday Radar*\n\n"
+                        "This bot was built by the International Support team\n"
+                        "to help you stay ahead of public holidays worldwide.\n\n"
+                        "*What can it do?*\n\n"
+                        "🏢 Track holidays in countries where we operate\n"
+                        "👥 Track holidays in countries where our employees are based\n"
+                        "🌍 Track specific countries of your choice\n\n"
+                        "You’ll receive alerts\n"
+                        "14 / 7 / 3 / 1 days before each public holiday.\n\n"
+                        "Use the menu below to subscribe.\n\n"
+                        "Questions, feedback or improvements?\n"
+                        "@rubbeldiekatz"
+                    )
+                    send_message(chat_id, welcome_text, main_menu())
 
+                elif text.startswith("🏢"):
+                    send_message(
+                        chat_id,
+                        "🌍 Select country:",
+                        paginated_countries("business", 0)
+                    )
+
+                elif text.startswith("👥"):
+                    send_message(
+                        chat_id,
+                        "🌍 Select country:",
+                        paginated_countries("employee", 0)
+                    )
+
+                elif text.startswith("🌍"):
+                    send_message(
+                        chat_id,
+                        "🌍 Select country:",
+                        paginated_countries("custom", 0)
+                    )
+
+                elif text.startswith("📋"):
+                    subs = data[chat_id]["subscriptions"]
+                    if not subs:
+                        send_message(chat_id, "You have no active subscriptions.", main_menu())
+                    else:
+                        msg = "📋 *Your Subscriptions:*\n\n"
+                        for c, mode in subs.items():
+                            msg += f"{COUNTRIES[c]} ({mode})\n"
+                        send_message(chat_id, msg, main_menu())
+
+                elif text.startswith("➖"):
+                    menu = remove_subscriptions_menu(chat_id)
+                    if not menu:
+                        send_message(chat_id, "No subscriptions to remove.", main_menu())
+                    else:
+                        send_message(chat_id, "Select subscription to remove:", menu)
+
+                elif text.startswith("⚙️"):
+                    send_message(chat_id, "⚙️ Settings", settings_keyboard())
 
                 elif text == "/stats" and username == ADMIN_USERNAME:
                     users = len(data)
@@ -422,6 +599,8 @@ if __name__ == "__main__":
                         f"👤 Active Users: {users}\n"
                         f"🌍 Total Subscriptions: {subs}"
                     )
+
+        # ===== DAILY TASKS =====
 
         today_utc = datetime.utcnow().date()
 
