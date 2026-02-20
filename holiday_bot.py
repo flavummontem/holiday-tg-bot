@@ -396,21 +396,22 @@ if __name__ == "__main__":
                 data = ensure_user(chat_id)
 
                 if text == "/start":
-                    welcome_text = (
-                        "👋 *Welcome to Global Holiday Radar*\n\n"
-                        "This bot was built by the International Support team\n"
-                        "to help you stay ahead of public holidays worldwide.\n\n"
-                        "*What can it do?*\n\n"
-                        "🏢 Track holidays in countries where we operate\n"
-                        "👥 Track holidays in countries where our employees are based\n"
-                        "🌍 Track specific countries of your choice\n\n"
-                        "You’ll receive alerts\n"
-                        "14 / 7 / 3 / 1 days before each public holiday.\n\n"
-                        "Use the menu below to subscribe.\n\n"
-                        "Questions, feedback or improvements?\n"
-                        "@rubbeldiekatz"
-                    )
-                    send_message(chat_id, welcome_text)
+    welcome_text = (
+        "👋 *Welcome to Global Holiday Radar*\n\n"
+        "This bot was built by the International Support team\n"
+        "to help you stay ahead of public holidays worldwide.\n\n"
+        "*What can it do?*\n\n"
+        "🏢 Track holidays in countries where we operate\n"
+        "👥 Track holidays in countries where our employees are based\n"
+        "🌍 Track specific countries of your choice\n\n"
+        "You’ll receive alerts\n"
+        "14 / 7 / 3 / 1 days before each public holiday.\n\n"
+        "Use the menu below to subscribe.\n\n"
+        "Questions, feedback or improvements?\n"
+        "@rubbeldiekatz"
+    )
+    send_message(chat_id, welcome_text, main_menu())
+
 
                 elif text == "/stats" and username == ADMIN_USERNAME:
                     users = len(data)
