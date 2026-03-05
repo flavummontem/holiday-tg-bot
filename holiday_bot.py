@@ -183,7 +183,7 @@ def main_menu():
     return {
         "keyboard": [
             ["🏢 Where We Operate (Business Presence Countries)"],
-            ["👥 Where Our Employees Are (Employee Presence Countries)"],
+            ["👥 Where Our Team Is Located (Team Presence Countries)"],
             ["🌍 Choose a Country"],
             ["📋 My Subscriptions"],
             ["➖ Remove a Subscription"],
@@ -373,7 +373,7 @@ def send_daily_alerts():
 
                         mode_label = {
                             "business": "🚖 BUSINESS HOLIDAY ALERT",
-                            "employee": "👥 EMPLOYEE LOCATION HOLIDAY ALERT",
+                            "employee": "👥 TEAM LOCATION HOLIDAY ALERT",
                             "custom": "🌍 COUNTRY HOLIDAY ALERT"
                         }
 
@@ -544,7 +544,7 @@ if __name__ == "__main__":
                         "to help you stay ahead of public holidays worldwide.\n\n"
                         "*What can it do?*\n\n"
                         "🏢 Track holidays in countries where we operate\n"
-                        "👥 Track holidays in countries where our employees are based\n"
+                        "👥 Track holidays in countries where our support teams operate\n"
                         "🌍 Track specific countries of your choice\n\n"
                         "You’ll receive alerts\n"
                         "14 / 7 / 3 / 1 days before each public holiday.\n\n"
