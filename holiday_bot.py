@@ -309,9 +309,9 @@ def fetch_holidays(country):
             items = data.get("response", {}).get("holidays", [])
 
             for h in items:
-                holiday_types = h.get("type", [])
+                holiday_types = [t.lower() for t in h.get("type", [])]
 
-                if not any(t in ["National holiday", "Public holiday"] for t in holiday_types):
+                if not any("public" in t or "national" in t for t in holiday_types):
                     continue
 
                 holidays.append({
