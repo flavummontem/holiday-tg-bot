@@ -185,6 +185,7 @@ def main_menu():
             ["🏢 Where We Operate (Business Presence Countries)"],
             ["👥 Where Our Team Is Located (Team Presence Countries)"],
             ["🌍 Choose a Country"],
+            ["📆 This Month Holidays"],
             ["📋 My Subscriptions"],
             ["➖ Remove a Subscription"],
             ["⚙️ Settings"]
@@ -424,6 +425,50 @@ def send_weekly_digest():
 
         send_message(chat_id, msg)
 
+def send_monthly_overview(chat_id):
+    data = load_json("subscriptions.json")
+    user = data.get(chat_id)
+
+    if not user or not user["subscriptions"]:
+        send_message(chat_id, "You have no active subscriptions.", main_menu())
+        return
+
+    tz = safe_timezone(user["timezone"])
+    today = datetime.now(tz).date()
+    current_month = today.month
+    current_year = today.year
+
+    result = {}
+
+    for country in user["subscriptions"]:
+        holidays = get_cached_holidays(country)
+
+        for h in holidays:
+            h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
+
+            if h_date.month == current_month and h_date.year == current_year:
+                result.setdefault(country, []).append((h_date, h["name"]))
+
+    if not result:
+        send_message(
+            chat_id,
+            "No public holidays scheduled for this month in your selected countries.",
+            main_menu()
+        )
+        return
+
+    month_name = today.strftime("%B %Y")
+
+    msg = f"📆 *Public Holidays — {month_name}*\n\n"
+
+    for country, holidays in sorted(result.items()):
+        msg += f"{COUNTRIES[country]}\n"
+        for d, name in sorted(holidays):
+            msg += f"• {d.strftime('%d %b')} — {name}\n"
+        msg += "\n"
+
+    send_message(chat_id, msg, main_menu())
+
 # ================= MAIN LOOP =================
 
 if __name__ == "__main__":
@@ -567,6 +612,8 @@ if __name__ == "__main__":
                         "🌍 Select country:",
                         paginated_countries("employee", 0)
                     )
+                elif text.startswith("📆"):
+                    send_monthly_overview(chat_id)
 
                 elif text.startswith("🌍"):
                     send_message(
