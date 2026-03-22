@@ -315,6 +315,8 @@ def fetch_holidays(country):
                     "public" in t
                     or "national" in t
                     or "religious" in t
+                    or "muslim" in t
+                    or "islamic" in t
                     for t in holiday_types
                 ):
                     continue
