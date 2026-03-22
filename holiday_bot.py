@@ -451,9 +451,8 @@ def send_monthly_overview(chat_id):
         for h in holidays:
             h_date = datetime.strptime(h["date"], "%Y-%m-%d").date()
 
-            if h_date.month == current_month and h_date.year == current_year:
+            if 0 <= (h_date - today).days <= 31:
                 result.setdefault(country, []).append((h_date, h["name"]))
-
     if not result:
         send_message(
             chat_id,
