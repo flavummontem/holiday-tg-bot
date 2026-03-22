@@ -311,7 +311,12 @@ def fetch_holidays(country):
             for h in items:
                 holiday_types = [t.lower() for t in h.get("type", [])]
 
-                if not any("public" in t or "national" in t for t in holiday_types):
+                if not any(
+                    "public" in t
+                    or "national" in t
+                    or "religious" in t
+                    for t in holiday_types
+                ):
                     continue
 
                 holidays.append({
